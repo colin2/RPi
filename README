@@ -1,0 +1,88 @@
+This is a simple PS/2 driver fo my Raspberry Pi toy/experimental OS (written entirely in assembler).
+
+
+It's a first pre-alpha version: I haven't properly checked it yet, nor is it optimised.
+
+The mapping is for a US keyboard layout.
+
+Pressing shift gives the shifted character (obviously) and pressing ALT adds 0x80 to the ASCII value.
+
+The "motion" keys: Home/End PgUp/PgDn Arrow left/right/up/down are encoded as single bytes between 0x00 and 0x1F (see below).
+
+CTRL and CMD/WIN/GUI are treated as "pseudo modifiers". That means pressing CTRL pressing C releasing C releasing CTRL will write <CTRL> <c> <KEYUP> <CTRL> to the buffer. Shift-cmd-ctrl-alt-left_arrow would write <CTRL> <CMD> <shift-left + 0x80> <KEYUP> <CMD> <KEYUP> <CTRL> (I think :-)
+
+
+BUGS:
+
+The FN keys, CapsLock, ScrLock and NumLock, PrtScr, Pause/Brk return bytes above 0x80 (conflicting with ALT-<...> at the moment)
+The number pad is treated as if NumLock is off (ie like motion keys)
+Left and Right modifier keys are recognised internally, but not distinguished when writing to the buffer.
+
+TODO:
+
+Some sort of timer should be started when starting to receive a byte. It should time out after a bit in case any bits got lost.
+Encode function keys as <FN> <n> ?
+Deal with buffer overflow possibility.
+
+
+/*  MYSCII :-)
+00 NUL  10 KEYUP
+01 CTRL 11 CMD
+02 left 12 shift-left
+03 rght 13 shift-rght
+04 up   14 shift-up
+05 down 15 shift-down
+06 home 16 shift-home
+07 end  17 shift-end
+08 BS   18 shift-BS
+09 TAB  19 shift-TAB
+0A LF   1A shift-LF
+0B ESC  1B shift-ESC
+0C pgup 1C shift-pgup
+0D pgdn 1D shift-pgdn
+0E ins  1E shift-ins
+0F FN 	1F shift-del
+*/
+
+I'll post an example of code using this in a bit. But, basically, it looks a bit like this:
+
+
+.include "register_defs.inc"
+.section .text
+
+.globl main
+main:
+	bl		init_ps2
+	cpsie	i                           // enable interrupts
+
+loop:
+	bl		read_char                   // blocks, ie. waits for char. Puts char in r0. No other regs changed.
+	bl		write_char                  // writes char in r0 to screen.
+	b		loop
+
+read_char:
+	push    {r1,r2,lr}
+
+	ldr     r1, =kbd_buff_info
+
+	1:
+	ldr     r0, [r1, #KBD_NVALCHARS]
+	cmp     r0, #0
+	beq     1b                              // no valid chars to read. Loop and try again.
+
+	cpsid   i                           // disable interrupts (while we're modifying the buffer ptrs etc)
+	sub     r0, #1                          // otherwise, decrement num valid chars in buffer
+	str     r0, [r1, #KBD_NVALCHARS]
+
+	ldr     r0, =kbd_buffer
+	ldr     r2, [r1, #KBD_BUFFPTR]
+	cmp     r2, r0                          // if buff_ptr is at BUFFSTART, then last char is at BUFFEND
+	subne   r2, #1
+	ldreq   r2, [r1, #KBD_BUFFEND]
+
+	ldrb    r0, [r2]
+	str     r2, [r1, #KBD_BUFFPTR]
+
+	cpsie   i                           // enable interrupts
+	pop     {r1,r2,pc}
+
